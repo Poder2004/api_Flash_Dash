@@ -18,7 +18,8 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
 		// กำหนดเส้นทางใหม่สำหรับการสมัคร
 		authRoutes.POST("/register/customer", authHandler.RegisterCustomerHandler)
 		authRoutes.POST("/register/rider", authHandler.RegisterRiderHandler)
-		// authRoutes.POST("/login", authHandler.LoginHandler)
+
+		authRoutes.POST("/login", authHandler.LoginHandler)
 	}
 
 	// คุณสามารถเพิ่ม Route กลุ่มอื่นๆ ได้ที่นี่ เช่น

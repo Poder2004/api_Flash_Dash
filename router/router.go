@@ -15,9 +15,10 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
 	// 2. จัดกลุ่ม Endpoint สำหรับ Auth
 	authRoutes := router.Group("/auth")
 	{
-		// 3. กำหนดเส้นทางให้ตรงกับ Handler
-		authRoutes.POST("/register", authHandler.RegisterHandler)
-		// authRoutes.POST("/login", authHandler.LoginHandler) // ถ้ามี login ก็เพิ่มตรงนี้
+		// กำหนดเส้นทางใหม่สำหรับการสมัคร
+		authRoutes.POST("/register/customer", authHandler.RegisterCustomerHandler)
+		authRoutes.POST("/register/rider", authHandler.RegisterRiderHandler)
+		// authRoutes.POST("/login", authHandler.LoginHandler)
 	}
 
 	// คุณสามารถเพิ่ม Route กลุ่มอื่นๆ ได้ที่นี่ เช่น

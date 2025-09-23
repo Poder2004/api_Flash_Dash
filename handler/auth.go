@@ -4,7 +4,6 @@ import (
 	"log"
 	"net/http"
 
-	// Import เพิ่ม
 	"api-flash-dash/model"
 
 	"cloud.google.com/go/firestore"
@@ -17,54 +16,95 @@ type AuthHandler struct {
 	AuthClient      *auth.Client
 }
 
-// RegisterHandler สำหรับสมัครสมาชิก
-func (h *AuthHandler) RegisterHandler(c *gin.Context) {
-	// ใน Model อาจจะปรับแก้ให้รับแค่ Phone ไม่ต้องรับ Email
-	var newUser model.User
-	if err := c.ShouldBindJSON(&newUser); err != nil {
+// registerUserCore เป็นฟังก์ชันกลางสำหรับสร้างผู้ใช้ใน Auth และบันทึกข้อมูลพื้นฐานลง Firestore
+func (h *AuthHandler) registerUserCore(c *gin.Context, coreData model.UserCore, role string) (*auth.UserRecord, error) {
+	syntheticEmail := coreData.Phone + "@flashdash.app"
+
+	// 1. สร้างผู้ใช้ใน Firebase Authentication
+	params := (&auth.UserToCreate{}).
+		UID(coreData.Phone). // ใช้เบอร์โทรเป็น UID
+		Email(syntheticEmail).
+		Password(coreData.Password).
+		DisplayName(coreData.Name)
+
+	userRecord, err := h.AuthClient.CreateUser(c.Request.Context(), params)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. บันทึกข้อมูลพื้นฐานลงใน Collection "users"
+	userData := map[string]interface{}{
+		"name":  coreData.Name,
+		"phone": coreData.Phone,
+		"role":  role,
+	}
+	_, err = h.FirestoreClient.Collection("users").Doc(userRecord.UID).Set(c.Request.Context(), userData)
+	if err != nil {
+		// Optional: ควรมี Logic ลบผู้ใช้ใน Auth ถ้าบันทึก Firestore ไม่สำเร็จ
+		return nil, err
+	}
+
+	return userRecord, nil
+}
+
+// RegisterCustomerHandler สำหรับสมัครสมาชิกเป็น Customer
+func (h *AuthHandler) RegisterCustomerHandler(c *gin.Context) {
+	var payload model.RegisterCustomerPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// --- ส่วนที่แก้ไข ---
-	// สร้างอีเมลแฝงจากเบอร์โทร
-	// ตัวอย่าง: "0812345678" -> "0812345678@flashdash.app"
-	// คุณสามารถเปลี่ยน "flashdash.app" เป็นชื่อโดเมนของแอปคุณได้
-	syntheticEmail := newUser.Phone + "@flashdash.app"
-
-	// 1. สร้างผู้ใช้ใน Firebase Authentication ด้วยอีเมลแฝง
-	// --- ส่วนที่แก้ไข ---
-	// กำหนด UID เองโดยใช้เบอร์โทร
-	params := (&auth.UserToCreate{}).
-		UID(newUser.Phone). // <-- กำหนด UID เองตรงนี้
-		Email(syntheticEmail).
-		Password(newUser.Password).
-		DisplayName(newUser.Name)
-
-	userRecord, err := h.AuthClient.CreateUser(c.Request.Context(), params)
+	// เรียกฟังก์ชันกลางเพื่อสร้างผู้ใช้
+	userRecord, err := h.registerUserCore(c, payload.UserCore, "customer")
 	if err != nil {
-		// ตรวจสอบ Error ว่าเกิดจากอีเมลซ้ำหรือไม่
-		if auth.IsEmailAlreadyExists(err) {
+		if auth.IsEmailAlreadyExists(err) || auth.IsUIDAlreadyExists(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "This phone number is already registered."})
 			return
 		}
-		log.Printf("Error creating user: %v\n", err)
+		log.Printf("Error creating user core: %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 		return
 	}
 
-	// 2. บันทึกข้อมูลลงใน Firestore (ที่สำคัญคือบันทึกเบอร์โทรจริงๆ ไว้)
-	userData := map[string]interface{}{
-		"name":  newUser.Name,
-		"phone": newUser.Phone, // <-- บันทึกเบอร์โทรจริง
-		"role":  newUser.Role,
-	}
-	_, err = h.FirestoreClient.Collection("users").Doc(userRecord.UID).Set(c.Request.Context(), userData)
+	// บันทึกข้อมูลที่อยู่ลงใน Sub-collection
+	_, _, err = h.FirestoreClient.Collection("users").Doc(userRecord.UID).Collection("addresses").Add(c.Request.Context(), payload.Address)
 	if err != nil {
-		log.Printf("Error saving user to Firestore: %v\n", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save user data"})
+		log.Printf("Error saving address: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save address data"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "User registered successfully", "uid": userRecord.UID})
+	c.JSON(http.StatusOK, gin.H{"message": "Customer registered successfully", "uid": userRecord.UID})
+}
+
+// RegisterRiderHandler สำหรับสมัครสมาชิกเป็น Rider
+func (h *AuthHandler) RegisterRiderHandler(c *gin.Context) {
+	var payload model.RegisterRiderPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// เรียกฟังก์ชันกลางเพื่อสร้างผู้ใช้
+	userRecord, err := h.registerUserCore(c, payload.UserCore, "rider")
+	if err != nil {
+		if auth.IsEmailAlreadyExists(err) || auth.IsUIDAlreadyExists(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "This phone number is already registered."})
+			return
+		}
+		log.Printf("Error creating user core: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+		return
+	}
+
+	// บันทึกข้อมูล Rider ลงใน Collection "riders"
+	_, err = h.FirestoreClient.Collection("riders").Doc(userRecord.UID).Set(c.Request.Context(), payload.Rider)
+	if err != nil {
+		log.Printf("Error saving rider details: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save rider data"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Rider registered successfully", "uid": userRecord.UID})
 }

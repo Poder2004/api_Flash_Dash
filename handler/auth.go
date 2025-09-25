@@ -30,7 +30,8 @@ func (h *AuthHandler) registerUserCore(c *gin.Context, coreData model.UserCore, 
 		UID(coreData.Phone). // ใช้เบอร์โทรเป็น UID
 		Email(syntheticEmail).
 		Password(coreData.Password).
-		DisplayName(coreData.Name)
+		DisplayName(coreData.Name).
+		PhotoURL(coreData.ImageProfile)
 
 	userRecord, err := h.AuthClient.CreateUser(c.Request.Context(), params)
 	if err != nil {
@@ -39,9 +40,10 @@ func (h *AuthHandler) registerUserCore(c *gin.Context, coreData model.UserCore, 
 
 	// 2. บันทึกข้อมูลพื้นฐานลงใน Collection "users"
 	userData := map[string]interface{}{
-		"name":  coreData.Name,
-		"phone": coreData.Phone,
-		"role":  role,
+		"name":          coreData.Name,
+		"phone":         coreData.Phone,
+		"role":          role,
+		"image_profile": coreData.ImageProfile,
 	}
 	_, err = h.FirestoreClient.Collection("users").Doc(userRecord.UID).Set(c.Request.Context(), userData)
 	if err != nil {
@@ -83,14 +85,12 @@ func (h *AuthHandler) RegisterCustomerHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Customer registered successfully", "uid": userRecord.UID})
 }
 
-
 func (h *AuthHandler) RegisterRiderHandler(c *gin.Context) {
 	var payload model.RegisterRiderPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
 
 	userRecord, err := h.registerUserCore(c, payload.UserCore, "rider")
 	if err != nil {

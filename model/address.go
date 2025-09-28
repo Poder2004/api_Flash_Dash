@@ -9,8 +9,8 @@ type Coordinates struct {
 // AddressPayload คือข้อมูลที่แอปจะส่งมาเมื่อ "สร้าง" หรือ "อัปเดต" ที่อยู่
 // จะไม่มีฟิลด์ ID เพราะเราไม่ได้ส่ง ID มากับข้อมูลส่วนนี้
 type AddressPayload struct {
-	Detail      string      `json:"detail" binding:"required"`
-	Coordinates Coordinates `json:"coordinates" binding:"required"`
+	Detail      string      `json:"detail" firestore:"detail" binding:"required"`
+	Coordinates Coordinates `json:"coordinates" firestore:"coordinates" binding:"required"`
 }
 
 // Address คือโครงสร้างข้อมูลสำหรับที่อยู่ 1 แห่งแบบสมบูรณ์
@@ -21,4 +21,3 @@ type Address struct {
 	Detail      string      `json:"detail" firestore:"detail"`
 	Coordinates Coordinates `json:"coordinates" firestore:"coordinates"`
 }
-

@@ -424,8 +424,8 @@ func (h *AuthHandler) UpdateUserAddress(c *gin.Context) {
 
 // --- ฟังก์ชันเสริม (Helper Function) ---
 // getAllUserAddresses ดึงที่อยู่ทั้งหมดของผู้ใช้คนนั้นๆ
-func (h *AuthHandler) getAllUserAddresses(uid string) ([]model.Address, error) {
-	var addresses []model.Address
+func (h *AuthHandler) getAllUserAddresses(uid string) ([]map[string]interface{}, error) {
+	var addresses []map[string]interface{}
 	iter := h.FirestoreClient.Collection("users").Doc(uid).Collection("addresses").Documents(context.Background())
 	for {
 		doc, err := iter.Next()
@@ -436,9 +436,18 @@ func (h *AuthHandler) getAllUserAddresses(uid string) ([]model.Address, error) {
 			return nil, err
 		}
 
-		var address model.Address
-		doc.DataTo(&address)
-		address.ID = doc.Ref.ID // เพิ่ม ID ของ Document เข้าไปใน struct
+		data := doc.Data()
+
+		coords, _ := data["coordinates"].(map[string]interface{})
+
+		address := map[string]interface{}{
+			"id":     doc.Ref.ID, // ✅ เพิ่ม id กลับไปด้วย
+			"detail": data["detail"],
+			"coordinates": map[string]interface{}{
+				"latitude":  coords["latitude"],
+				"longitude": coords["longitude"],
+			},
+		}
 		addresses = append(addresses, address)
 	}
 	return addresses, nil

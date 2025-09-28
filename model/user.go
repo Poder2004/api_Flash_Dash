@@ -30,3 +30,8 @@ type UserProfile struct {
 	Role         string `json:"role" firestore:"role"`
 }
 
+type UpdateProfilePayload struct {
+	Name         *string `json:"name"`
+	Password     *string `json:"password"`
+	ImageProfile *string `json:"image_profile"`
+}

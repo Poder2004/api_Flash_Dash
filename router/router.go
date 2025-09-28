@@ -2,6 +2,7 @@ package router
 
 import (
 	"api-flash-dash/handler" // <-- import handler ของเรา
+	"api-flash-dash/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,12 +23,19 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
 		authRoutes.POST("/login", authHandler.LoginHandler)
 	}
 
-	// คุณสามารถเพิ่ม Route กลุ่มอื่นๆ ได้ที่นี่ เช่น
-	// productRoutes := router.Group("/products")
-	// {
-	//   productRoutes.GET("/", productHandler.GetAll)
-	// }
+	private := router.Group("/api")
+	private.Use(middleware.AuthMiddleware(authHandler.AuthClient))
+	{
+		// **** จุดแก้ไข: เปลี่ยน userHandler เป็น authHandler ****
+		// เพราะเราส่ง authHandler เข้ามาในฟังก์ชันนี้
+		private.PUT("/user/profile", authHandler.UpdateUserProfile)
 
-	// 4. คืนค่า router ที่ตั้งค่าเสร็จแล้วกลับไป
+		// เส้นทางสำหรับจัดการที่อยู่
+		// Endpoint: POST /api/user/addresses
+		private.POST("/user/addresses", authHandler.AddUserAddress)
+
+		// Endpoint: PUT /api/user/addresses/:addressId
+		private.PUT("/user/addresses/:addressId", authHandler.UpdateUserAddress)
+	}
 	return router
 }

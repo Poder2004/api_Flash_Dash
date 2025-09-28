@@ -115,6 +115,7 @@ func (h *AuthHandler) RegisterRiderHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "Rider registered successfully", "uid": userRecord.UID})
 }
+
 //-----------------------------------------------------------------------------------------------------------------------------------------//
 
 // LoginRequest คือ struct สำหรับรับข้อมูลตอนล็อกอิน
@@ -217,84 +218,122 @@ func (h *AuthHandler) LoginHandler(c *gin.Context) {
 
 //-----------------------------------------------------------------------------------------------------------------------------------------//
 
+// UpdateUserProfile คือ Handler สำหรับอัปเดตข้อมูลผู้ใช้
 func (h *AuthHandler) UpdateUserProfile(c *gin.Context) {
-	// 1. ดึง ID Token จาก Header เพื่อตรวจสอบสิทธิ์
-	authHeader := c.GetHeader("Authorization")
-	if authHeader == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
+	// 1. ดึง UID จาก Context
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User UID not found in context"})
 		return
 	}
-	idToken := strings.Replace(authHeader, "Bearer ", "", 1)
+	uidStr := uid.(string)
 
-	// 2. ตรวจสอบ Token และดึง UID ของผู้ใช้ออกมา
-	token, err := h.AuthClient.VerifyIDToken(context.Background(), idToken)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid ID token"})
-		return
-	}
-	uid := token.UID
-
-	// 3. รับข้อมูล JSON ที่ส่งมาจากแอป
+	// 2. รับข้อมูล JSON ที่ส่งมาจากแอป
 	var payload model.UpdateProfilePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
 		return
 	}
 
-	// 4. เตรียมข้อมูลที่จะอัปเดตใน Firebase Authentication
+	// 3. เตรียมข้อมูลที่จะอัปเดต
 	authParams := &auth.UserToUpdate{}
-	firestoreUpdateData := make(map[string]interface{})
+	var firestoreUpdates []firestore.Update
 
-	// ตรวจสอบทีละ field ว่ามีการส่งข้อมูลมาหรือไม่
-	if payload.Name != nil && *payload.Name != "" {
+	if payload.Name != nil {
 		authParams.DisplayName(*payload.Name)
-		firestoreUpdateData["name"] = *payload.Name
+		firestoreUpdates = append(firestoreUpdates, firestore.Update{Path: "name", Value: *payload.Name})
 	}
 	if payload.Password != nil && *payload.Password != "" {
-		// ควรมีการ validate ความยาวรหัสผ่านเพิ่มเติม
 		if len(*payload.Password) < 6 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Password must be at least 6 characters"})
 			return
 		}
 		authParams.Password(*payload.Password)
 	}
-	if payload.ImageProfile != nil && *payload.ImageProfile != "" {
-		// ประกอบร่าง URL เต็มสำหรับ PhotoURL
+	if payload.ImageProfile != nil {
 		authParams.PhotoURL(*payload.ImageProfile)
-		firestoreUpdateData["image_profile"] = *payload.ImageProfile // Firestore เก็บแค่ชื่อไฟล์
+		firestoreUpdates = append(firestoreUpdates, firestore.Update{Path: "image_profile", Value: *payload.ImageProfile})
 	}
 
-	// 5. สั่งอัปเดตข้อมูลใน Firebase Authentication
-	_, err = h.AuthClient.UpdateUser(context.Background(), uid, authParams)
-	if err != nil {
+	// 4. สั่งอัปเดตข้อมูลใน Firebase Authentication
+	if _, err := h.AuthClient.UpdateUser(context.Background(), uidStr, authParams); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update Firebase Auth user: " + err.Error()})
 		return
 	}
 
-	// 6. สั่งอัปเดตข้อมูลใน Firestore
-	// ตรวจสอบว่ามีข้อมูลให้อัปเดตหรือไม่ (ป้องกันการอัปเดตค่าว่าง)
-	if len(firestoreUpdateData) > 0 {
-		_, err = h.FirestoreClient.Collection("users").Doc(uid).Set(context.Background(), firestoreUpdateData, firestore.MergeAll)
-		if err != nil {
+	// 5. สั่งอัปเดตข้อมูลใน Firestore (ถ้ามี)
+	if len(firestoreUpdates) > 0 {
+		if _, err := h.FirestoreClient.Collection("users").Doc(uidStr).Update(context.Background(), firestoreUpdates); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update Firestore user: " + err.Error()})
 			return
 		}
 	}
-	// **** 6. ดึงข้อมูลโปรไฟล์ล่าสุดจาก Firestore ****
-	userDoc, err := h.FirestoreClient.Collection("users").Doc(uid).Get(context.Background())
+
+	// **** 6. จุดแก้ไขสำคัญ: ดึงข้อมูลล่าสุดทั้งหมดเพื่อส่งกลับไป ****
+	updatedData, err := h.getUserDataByUID(uidStr)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve updated user profile: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve updated user data: " + err.Error()})
 		return
 	}
-	var updatedProfile model.UserProfile
-	userDoc.DataTo(&updatedProfile)
 
-	// **** 7. ส่งข้อความพร้อมกับข้อมูลที่อัปเดตแล้วกลับไปหาแอป ****
+	// ดึง ID Token เดิมจาก Header เพื่อส่งกลับไปให้แอปใช้ต่อ
+	authHeader := c.GetHeader("Authorization")
+	idToken := strings.Replace(authHeader, "Bearer ", "", 1)
+
+	// 7. ส่งข้อความและข้อมูลที่อัปเดตแล้วกลับไปในโครงสร้างที่สมบูรณ์
 	c.JSON(http.StatusOK, gin.H{
-		"message":        "อัปเดตโปรไฟล์สำเร็จ",
-		"updatedProfile": updatedProfile,
+		"message":          "อัปเดตโปรไฟล์สำเร็จ",
+		"idToken":          idToken,                         // <-- เพิ่ม idToken เข้าไป
+		"userProfile":      updatedData["userProfile"],      // <-- แยก userProfile ออกมา
+		"roleSpecificData": updatedData["roleSpecificData"], // <-- แยก roleSpecificData ออกมา
 	})
 }
+
+// --- ฟังก์ชันเสริม (Helper Function) ---
+// getUserDataByUID ดึงข้อมูลผู้ใช้ทั้งหมดจาก Firestore ตาม UID
+func (h *AuthHandler) getUserDataByUID(uid string) (map[string]interface{}, error) {
+	userDoc, err := h.FirestoreClient.Collection("users").Doc(uid).Get(context.Background())
+	if err != nil {
+		log.Printf("Error getting user from Firestore: %v\n", err)
+		return nil, err
+	}
+	userProfile := userDoc.Data()
+
+	role := userProfile["role"].(string)
+	var roleSpecificData interface{}
+
+	if role == "customer" {
+		var addresses []map[string]interface{}
+		iter := h.FirestoreClient.Collection("users").Doc(uid).Collection("addresses").Documents(context.Background())
+		for {
+			doc, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			addressData := doc.Data()
+			addressData["id"] = doc.Ref.ID
+			addresses = append(addresses, addressData)
+		}
+		roleSpecificData = addresses
+	} else if role == "rider" {
+		riderDoc, err := h.FirestoreClient.Collection("riders").Doc(uid).Get(context.Background())
+		if err == nil {
+			roleSpecificData = riderDoc.Data()
+		}
+	}
+
+	// สร้างข้อมูลที่จะส่งกลับให้มีโครงสร้างเหมือน LoginResponse
+	fullResponse := map[string]interface{}{
+		"userProfile":      userProfile,
+		"roleSpecificData": roleSpecificData,
+	}
+
+	return fullResponse, nil
+}
+
 //-----------------------------------------------------------------------------------------------------------------------------------------//
 
 // --- ฟังก์ชันใหม่สำหรับเพิ่มที่อยู่ ---
@@ -336,7 +375,6 @@ func (h *AuthHandler) AddUserAddress(c *gin.Context) {
 		"addresses": allAddresses,
 	})
 }
-
 
 // --- ฟังก์ชันใหม่สำหรับอัปเดตที่อยู่ ---
 // UpdateUserAddress คือ Handler สำหรับอัปเดตที่อยู่ที่มีอยู่แล้ว
@@ -383,7 +421,6 @@ func (h *AuthHandler) UpdateUserAddress(c *gin.Context) {
 		"addresses": allAddresses,
 	})
 }
-
 
 // --- ฟังก์ชันเสริม (Helper Function) ---
 // getAllUserAddresses ดึงที่อยู่ทั้งหมดของผู้ใช้คนนั้นๆ

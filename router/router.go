@@ -39,6 +39,11 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
 		// เส้นทางสำหรับค้นหาผู้ใช้
 		// Endpoint: GET /api/users/find?phone=xxxxxxxxxx
 		private.GET("/users/find", authHandler.FindUserByPhone)
+		// เส้นทางสำหรับสร้างการจัดส่ง
+		// Endpoint: POST /api/deliveries
+		private.POST("/deliveries", authHandler.CreateDeliveryHandler)
+		// Endpoint: GET /api/user/deliveries
+		private.GET("/user/deliveries", authHandler.GetUserDeliveries)
 
 		// --- เส้นทางสำหรับ Rider ---
 		// Endpoint: PUT /api/rider/profile

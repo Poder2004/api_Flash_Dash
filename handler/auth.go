@@ -453,4 +453,69 @@ func (h *AuthHandler) getAllUserAddresses(uid string) ([]map[string]interface{},
 	return addresses, nil
 }
 
-//-----------------------------------------------------------------------------------------------------------------------------------------//
+// -----------------------------------------------------------------------------------------------------------------------------------------//
+// **** เพิ่มฟังก์ชันใหม่สำหรับค้นหาผู้ใช้ ****
+// FindUserByPhone ค้นหาผู้ใช้ด้วยเบอร์โทรศัพท์และคืนค่าชื่อพร้อมที่อยู่ทั้งหมด
+func (h *AuthHandler) FindUserByPhone(c *gin.Context) {
+	phone := c.Query("phone")
+	if phone == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Phone number query parameter is required"})
+		return
+	}
+
+	query := h.FirestoreClient.Collection("users").Where("phone", "==", phone).Limit(1)
+	iter := query.Documents(context.Background())
+	doc, err := iter.Next()
+	if err == iterator.Done {
+		c.JSON(http.StatusNotFound, gin.H{"error": "ไม่พบผู้ใช้"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query user data"})
+		return
+	}
+
+	var userProfile model.UserProfile
+	if err := doc.DataTo(&userProfile); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse user profile"})
+		return
+	}
+	uid := doc.Ref.ID
+
+	// --- 1. จุดแก้ไขหลัก ---
+	// สร้าง slice สำหรับเก็บข้อมูลประเภท []model.Address โดยตรง
+	var addresses []model.Address
+
+	// 2. ดึงข้อมูลที่อยู่ทั้งหมดจาก sub-collection
+	addrIter := h.FirestoreClient.Collection("users").Doc(uid).Collection("addresses").Documents(context.Background())
+	for {
+		addrDoc, err := addrIter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve user addresses"})
+			return
+		}
+
+		// 3. แปลงข้อมูล Firestore แต่ละอันให้เป็น struct model.Address
+		var address model.Address
+		if err := addrDoc.DataTo(&address); err != nil {
+			log.Printf("Could not convert address data: %v", err)
+			continue // ข้ามที่อยู่ที่มีปัญหาไป
+		}
+		address.ID = addrDoc.Ref.ID // เพิ่ม ID เข้าไปใน struct ด้วย
+
+		// 4. เพิ่ม struct ที่แปลงแล้วเข้าไปใน slice
+		addresses = append(addresses, address)
+	}
+	// --- จบส่วนแก้ไข ---
+
+	// 5. สร้างข้อมูลเพื่อส่งกลับ (ตอนนี้ชนิดข้อมูลถูกต้องแล้ว)
+	response := model.FindUserResponse{
+		Name:      userProfile.Name,
+		Addresses: addresses, // <-- ไม่มี Error แล้ว
+	}
+
+	c.JSON(http.StatusOK, response)
+}

@@ -1,11 +1,11 @@
 package model
 
 type Rider struct {
-	ImageVehicle        string `json:"image_vehicle" firestore:"image_vehicle"`
-	VehicleRegistration string `json:"vehicle_registration" firestore:"vehicle_registration"`
+    ImageVehicle        string `json:"image_vehicle" firestore:"image_vehicle"`
+    VehicleRegistration string `json:"vehicle_registration" firestore:"vehicle_registration"`
 }
 
-// +++ Struct ใหม่สำหรับอัปเดตโปรไฟล์ Rider +++
+
 type UpdateRiderProfilePayload struct {
 	Name                *string `json:"name"`
 	Password            *string `json:"password"`

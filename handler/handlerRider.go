@@ -10,6 +10,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"firebase.google.com/go/v4/auth"
 	"github.com/gin-gonic/gin"
+	"google.golang.org/api/iterator"
 )
 
 // +++ ฟังก์ชันใหม่สำหรับอัปเดตโปรไฟล์ Rider (ฉบับปรับปรุง) +++
@@ -143,5 +144,69 @@ func (h *AuthHandler) getRiderDataByUID(uid string) (map[string]interface{}, err
 }
 
 //yesss
+
+// GetPendingDeliveries ดึงรายการจัดส่งทั้งหมดที่มีสถานะเป็น "pending" สำหรับ Rider
+func (h *AuthHandler) GetPendingDeliveries(c *gin.Context) {
+    var deliveries []model.Delivery
+    ctx := context.Background()
+
+    // 1. สร้าง Query เพื่อดึงข้อมูล delivery ที่มี status เป็น "pending"
+    //    และเรียงลำดับจากเก่าที่สุดไปใหม่ที่สุด (เพื่อให้ Rider รับงานที่ค้างนานที่สุดก่อน)
+    iter := h.FirestoreClient.Collection("deliveries").
+        Where("status", "==", "pending").
+        
+        Documents(ctx)
+
+    // 2. วนลูปเพื่ออ่านข้อมูลแต่ละรายการ (เหมือนโค้ดเดิม)
+    for {
+        doc, err := iter.Next()
+        if err == iterator.Done {
+            break
+        }
+        if err != nil {
+            log.Printf("Failed to iterate pending deliveries: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get pending deliveries"})
+            return
+        }
+
+        var delivery model.Delivery
+        if err := doc.DataTo(&delivery); err != nil {
+            log.Printf("Failed to convert delivery data: %v", err)
+            continue // ข้ามเอกสารที่มีปัญหาไป
+        }
+        delivery.ID = doc.Ref.ID
+
+        // 3. ดึงข้อมูลโปรไฟล์ของผู้ส่งและผู้รับ (Enrichment - โค้ดส่วนนี้ยังคงมีประโยชน์)
+        // เพื่อให้ Rider เห็นว่าใครเป็นผู้ส่งและผู้รับ
+        senderProfile, _ := h.FirestoreClient.Collection("users").Doc(delivery.SenderUID).Get(ctx)
+        if senderProfile != nil {
+            senderData := senderProfile.Data()
+            if name, ok := senderData["name"].(string); ok {
+                delivery.SenderName = name
+            }
+            if img, ok := senderData["image_profile"].(string); ok {
+                delivery.SenderImageProfile = img
+            }
+        }
+
+        receiverProfile, _ := h.FirestoreClient.Collection("users").Doc(delivery.ReceiverUID).Get(ctx)
+        if receiverProfile != nil {
+            receiverData := receiverProfile.Data()
+            if name, ok := receiverData["name"].(string); ok {
+                delivery.ReceiverName = name
+            }
+            if img, ok := receiverData["image_profile"].(string); ok {
+                delivery.ReceiverImageProfile = img
+            }
+        }
+
+        deliveries = append(deliveries, delivery)
+    }
+
+    // 4. ส่งข้อมูลทั้งหมดกลับไป
+    c.JSON(http.StatusOK, gin.H{
+        "pendingDeliveries": deliveries,
+    })
+}
 
 

@@ -521,7 +521,6 @@ func (h *AuthHandler) FindUserByPhone(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-
 // CreateDeliveryHandler จัดการการสร้างเอกสารการจัดส่งใหม่
 func (h *AuthHandler) CreateDeliveryHandler(c *gin.Context) {
 	// 1. ดึง UID ของผู้ส่ง (Sender) จาก Context
@@ -555,16 +554,16 @@ func (h *AuthHandler) CreateDeliveryHandler(c *gin.Context) {
 
 	// 4. สร้างเอกสารใหม่ใน Collection 'deliveries'
 	deliveryData := map[string]interface{}{
-		"senderUID":          senderUIDStr,
-		"senderAddress":      senderAddrDoc.Data(),
-		"receiverUID":        payload.ReceiverPhone,
-		"receiverAddress":    receiverAddrDoc.Data(),
-		"itemDescription":    payload.ItemDescription,
-		"itemImage":          payload.ItemImageFilename,
-		"riderNoteImage":     payload.RiderNoteImageFilename,
-		"status":             "pending", // สถานะเริ่มต้น
-		"createdAt":          time.Now(), // เวลาที่สร้าง
-		"riderUID":           nil, // ยังไม่มีไรเดอร์รับงาน
+		"senderUID":       senderUIDStr,
+		"senderAddress":   senderAddrDoc.Data(),
+		"receiverUID":     payload.ReceiverPhone,
+		"receiverAddress": receiverAddrDoc.Data(),
+		"itemDescription": payload.ItemDescription,
+		"itemImage":       payload.ItemImageFilename,
+		"riderNoteImage":  payload.RiderNoteImageFilename,
+		"status":          "pending",  // สถานะเริ่มต้น
+		"createdAt":       time.Now(), // เวลาที่สร้าง
+		"riderUID":        nil,        // ยังไม่มีไรเดอร์รับงาน
 	}
 
 	_, _, err = h.FirestoreClient.Collection("deliveries").Add(context.Background(), deliveryData)
@@ -577,76 +576,85 @@ func (h *AuthHandler) CreateDeliveryHandler(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"message": "สร้างการจัดส่งสำเร็จ!"})
 }
 
-
 // GetUserDeliveries ดึงรายการจัดส่งที่ผู้ใช้เป็น "ผู้ส่ง" และ "ผู้รับ"
 func (h *AuthHandler) GetUserDeliveries(c *gin.Context) {
-	// 1. ดึง UID ของผู้ใช้ที่ Login อยู่ ออกมาจาก Context ที่ Middleware ตั้งค่าไว้
-	uid, exists := c.Get("uid")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "User UID not found in context"})
-		return
-	}
+	uid, _ := c.Get("uid")
 	uidStr := uid.(string)
 
-	// 2. ค้นหารายการที่ผู้ใช้เป็น "ผู้ส่ง" (Sent) โดยเรียกใช้ฟังก์ชันเสริม
-	sentDeliveries, err := h.queryDeliveries(c.Request.Context(), "senderUID", uidStr)
+	// 1. ค้นหารายการที่ผู้ใช้เป็น "ผู้ส่ง"
+	sentDeliveries, err := h.queryDeliveries("senderUID", uidStr)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get sent deliveries: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get sent deliveries"})
 		return
 	}
 
-	// 3. ค้นหารายการที่ผู้ใช้เป็น "ผู้รับ" (Received) โดยเรียกใช้ฟังก์ชันเสริม
-	receivedDeliveries, err := h.queryDeliveries(c.Request.Context(), "receiverUID", uidStr)
+	// 2. ค้นหารายการที่ผู้ใช้เป็น "ผู้รับ"
+	receivedDeliveries, err := h.queryDeliveries("receiverUID", uidStr)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get received deliveries: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get received deliveries"})
 		return
 	}
 
-	// 4. ส่งข้อมูลทั้งสองรายการกลับไปให้แอป Flutter
+	// 3. ส่งข้อมูลทั้งสองรายการกลับไป
 	c.JSON(http.StatusOK, gin.H{
 		"sentDeliveries":     sentDeliveries,
 		"receivedDeliveries": receivedDeliveries,
 	})
 }
 
-// --- ฟังก์ชันเสริม (Helper Function) ---
-// queryDeliveries คือฟังก์ชันที่ใช้ในการค้นหาข้อมูลใน collection 'deliveries' ตาม field ที่กำหนด
-func (h *AuthHandler) queryDeliveries(ctx context.Context, field, uid string) ([]model.Delivery, error) {
+// --- ฟังก์ชันเสริม (Helper Function) ที่แก้ไขแล้ว ---
+// queryDeliveries คือฟังก์ชันที่ใช้ในการค้นหาข้อมูลใน collection 'deliveries'
+func (h *AuthHandler) queryDeliveries(field, uid string) ([]model.Delivery, error) {
 	var deliveries []model.Delivery
+	ctx := context.Background()
 
-	// สร้าง query เพื่อค้นหาเอกสารใน collection 'deliveries'
 	iter := h.FirestoreClient.Collection("deliveries").Where(field, "==", uid).Documents(ctx)
 	for {
 		doc, err := iter.Next()
 		if err == iterator.Done {
-			break // สิ้นสุดการวนลูปเมื่อไม่เหลือเอกสารแล้ว
+			break
 		}
 		if err != nil {
-			return nil, err // คืนค่า error หากเกิดปัญหา
+			log.Printf("Failed to iterate deliveries: %v", err)
+			return nil, err
 		}
 
-		// แปลงข้อมูลจาก Firestore ให้อยู่ในรูปแบบของ struct 'Delivery'
 		var delivery model.Delivery
-		doc.DataTo(&delivery)
-		delivery.ID = doc.Ref.ID // เพิ่ม ID ของเอกสารเข้าไปใน struct ด้วย
+		if err := doc.DataTo(&delivery); err != nil {
+			log.Printf("Failed to convert delivery data: %v", err)
+			continue // ข้ามเอกสารที่มีปัญหา
+		}
+		delivery.ID = doc.Ref.ID
 
-		// (Optional but good practice) ดึงชื่อผู้ส่งและผู้รับมาประกอบร่าง
+		// --- จุดแก้ไข: ดึงชื่อและรูปโปรไฟล์ของผู้ส่งและผู้รับ ---
 		senderProfile, _ := h.FirestoreClient.Collection("users").Doc(delivery.SenderUID).Get(ctx)
 		if senderProfile != nil {
-			if name, ok := senderProfile.Data()["name"].(string); ok {
+			senderData := senderProfile.Data()
+			if name, ok := senderData["name"].(string); ok {
 				delivery.SenderName = name
+			}
+			// ดึงรูปโปรไฟล์ผู้ส่ง
+			if img, ok := senderData["image_profile"].(string); ok {
+				delivery.SenderImageProfile = img
 			}
 		}
 
 		receiverProfile, _ := h.FirestoreClient.Collection("users").Doc(delivery.ReceiverUID).Get(ctx)
 		if receiverProfile != nil {
-			if name, ok := receiverProfile.Data()["name"].(string); ok {
+			receiverData := receiverProfile.Data()
+			if name, ok := receiverData["name"].(string); ok {
 				delivery.ReceiverName = name
 			}
+			// ดึงรูปโปรไฟล์ผู้รับ
+			if img, ok := receiverData["image_profile"].(string); ok {
+				delivery.ReceiverImageProfile = img
+			}
 		}
+		// --- จบส่วนแก้ไข ---
 
 		deliveries = append(deliveries, delivery)
 	}
 	return deliveries, nil
 }
+
 // -----------------------------------------------------------------------------------------------------------------------------------------//

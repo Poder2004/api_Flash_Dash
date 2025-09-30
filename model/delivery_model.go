@@ -29,4 +29,6 @@ type Delivery struct {
 	RiderUID        *string   `json:"riderUID,omitempty" firestore:"riderUID"` // อาจเป็น nil
 	SenderName      string    `json:"senderName,omitempty"`                    // จะถูกเติมค่าทีหลัง
 	ReceiverName    string    `json:"receiverName,omitempty"`                  // จะถูกเติมค่าทีหลัง
+	SenderImageProfile   string      `json:"senderImageProfile,omitempty"`
+	ReceiverImageProfile string      `json:"receiverImageProfile,omitempty"`
 }

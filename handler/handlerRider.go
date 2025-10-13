@@ -3,6 +3,7 @@ package handler
 import (
 	"api-flash-dash/model"
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -206,6 +207,82 @@ func (h *AuthHandler) GetPendingDeliveries(c *gin.Context) {
     // 4. ส่งข้อมูลทั้งหมดกลับไป
     c.JSON(http.StatusOK, gin.H{
         "pendingDeliveries": deliveries,
+    })
+}
+
+// +++ โค้ดใหม่: ฟังก์ชันสำหรับ Rider รับงาน +++
+
+// AcceptDelivery คือ Handler สำหรับให้ Rider กดรับงาน
+func (h *AuthHandler) AcceptDelivery(c *gin.Context) {
+    ctx := context.Background()
+
+    // 1. ดึงข้อมูลที่จำเป็นจาก Request
+    // deliveryId จะมาจาก URL path เช่น /deliveries/xyz/accept
+    deliveryId := c.Param("deliveryId")
+    if deliveryId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Delivery ID is required"})
+        return
+    }
+
+    // riderUID จะมาจาก Middleware หลังจากยืนยันตัวตนแล้ว (สมมติว่าเก็บไว้ใน context ชื่อ "uid")
+    riderUID, exists := c.Get("uid")
+    if !exists {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Rider UID not found"})
+        return
+    }
+    riderUIDStr, ok := riderUID.(string)
+    if !ok {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Rider UID is not in a valid format"})
+        return
+    }
+
+    // 2. อัปเดตข้อมูลใน Firestore โดยใช้ Transaction เพื่อความปลอดภัย
+    deliveryRef := h.FirestoreClient.Collection("deliveries").Doc(deliveryId)
+
+    err := h.FirestoreClient.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+        doc, err := tx.Get(deliveryRef) // อ่านข้อมูลล่าสุดภายใน Transaction
+        if err != nil {
+            return err // คืนค่า error เพื่อให้ Transaction ล้มเหลว
+        }
+
+        var delivery model.Delivery
+        if err := doc.DataTo(&delivery); err != nil {
+            return err
+        }
+
+        // 3. **ตรวจสอบเงื่อนไขสำคัญ:** งานนี้ต้องมีสถานะเป็น "pending" เท่านั้น
+        if delivery.Status != "pending" {
+            // ถ้าสถานะไม่ใช่ "pending" แสดงว่ามีคนอื่นตัดหน้าไปแล้ว
+            // คืนค่า error เพื่อยกเลิก Transaction
+            return errors.New("delivery is not pending, it may have already been accepted")
+        }
+
+        // 4. ถ้าเงื่อนไขถูกต้อง, ทำการอัปเดตข้อมูล
+        return tx.Update(deliveryRef, []firestore.Update{
+            {Path: "status", Value: "accepted"}, // เปลี่ยน status เป็น "accepted"
+            {Path: "riderUID", Value: riderUIDStr},  // อัปเดต riderUID ของคนที่รับงาน
+        })
+    })
+
+    // 5. ตรวจสอบผลลัพธ์ของ Transaction
+    if err != nil {
+        // ตรวจสอบว่าเป็น error ที่เราสร้างขึ้นเองหรือไม่
+        if err.Error() == "delivery is not pending, it may have already been accepted" {
+            log.Printf("Rider %s failed to accept delivery %s: %v", riderUIDStr, deliveryId, err)
+            c.JSON(http.StatusConflict, gin.H{"error": err.Error()}) // 409 Conflict เหมาะสมกับสถานการณ์นี้
+        } else {
+            log.Printf("Transaction failed for accepting delivery %s: %v", deliveryId, err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to accept delivery"})
+        }
+        return
+    }
+
+    // 6. หากสำเร็จ ส่งข้อความกลับไป
+    log.Printf("Rider %s successfully accepted delivery %s", riderUIDStr, deliveryId)
+    c.JSON(http.StatusOK, gin.H{
+        "message": "Delivery accepted successfully",
+        "deliveryId": deliveryId,
+        "riderUID": riderUIDStr,
     })
 }
 

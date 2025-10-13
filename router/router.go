@@ -68,6 +68,10 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
 		// Endpoint: PUT /api/rider/deliveries/{deliveryId}/pickup
 		private.PUT("/rider/deliveries/:deliveryId/pickup", authHandler.ConfirmPickup)
 
+				// +++ เส้นทางใหม่สำหรับยืนยันการส่งสินค้า +++
+		// Endpoint: PUT /api/rider/deliveries/{deliveryId}/deliver
+		private.PUT("/rider/deliveries/:deliveryId/deliver", authHandler.ConfirmDelivery)
+
 	}
 
 	return router

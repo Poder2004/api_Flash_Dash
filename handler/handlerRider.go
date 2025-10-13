@@ -408,3 +408,71 @@ func (h *AuthHandler) ConfirmPickup(c *gin.Context) {
         "newStatus": "picked_up",
     })
 }
+
+// +++ ฟังก์ชันใหม่: ยืนยันการส่งสินค้า +++
+func (h *AuthHandler) ConfirmDelivery(c *gin.Context) {
+	ctx := context.Background()
+
+	deliveryId := c.Param("deliveryId")
+	if deliveryId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Delivery ID is required"})
+		return
+	}
+
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: UID not found"})
+		return
+	}
+	riderUID := uid.(string)
+
+	// รับ URL ของรูปภาพที่ถ่ายตอนส่งของ
+	var payload struct {
+		DeliveredImageURL string `json:"deliveredImageURL" binding:"required,url"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	deliveryRef := h.FirestoreClient.Collection("deliveries").Doc(deliveryId)
+
+	err := h.FirestoreClient.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		doc, err := tx.Get(deliveryRef)
+		if err != nil {
+			return err
+		}
+
+		var delivery model.Delivery
+		if err := doc.DataTo(&delivery); err != nil {
+			return err
+		}
+
+		// ตรวจสอบเงื่อนไข:
+		// - สถานะต้องเป็น "picked_up"
+		// - RiderUID ต้องตรงกัน
+		if delivery.Status != "picked_up" {
+			return errors.New("delivery status is not 'picked_up'")
+		}
+		if delivery.RiderUID == nil || *delivery.RiderUID != riderUID {
+			return errors.New("you are not the assigned rider for this delivery")
+		}
+
+		// ทำการอัปเดต
+		return tx.Update(deliveryRef, []firestore.Update{
+			{Path: "status", Value: "delivered"}, // <-- เปลี่ยนสถานะเป็น "delivered"
+			{Path: "deliveredImage", Value: payload.DeliveredImageURL}, // <-- เพิ่ม field ใหม่สำหรับรูปตอนส่ง
+		})
+	})
+
+	if err != nil {
+		log.Printf("Failed to confirm delivery for %s: %v", deliveryId, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update delivery status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":   "Delivery confirmed successfully",
+		"newStatus": "delivered",
+	})
+}

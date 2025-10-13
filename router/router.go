@@ -58,6 +58,10 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
 		// เมื่อ Rider กดรับงาน, App จะยิงมาที่เส้นทางนี้
 		// โดย :deliveryId คือ ID ของงานที่ต้องการรับ
 		private.POST("/rider/deliveries/:deliveryId/accept", authHandler.AcceptDelivery)
+
+		// ++ เพิ่มเส้นทางใหม่สำหรับอัปเดตตำแหน่งของไรเดอร์ ++
+        // Endpoint: POST /api/rider/location
+        private.POST("/rider/location", authHandler.UpdateRiderLocation)
 	}
 
 	return router

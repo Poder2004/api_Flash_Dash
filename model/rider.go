@@ -13,3 +13,9 @@ type UpdateRiderProfilePayload struct {
 	ImageVehicle        *string `json:"image_vehicle"`
 	VehicleRegistration *string `json:"vehicle_registration"`
 }
+
+// LocationUpdateRequest เป็น struct สำหรับรับข้อมูลพิกัดจากแอปไรเดอร์
+type LocationUpdateRequest struct {
+    Latitude  float64 `json:"latitude" binding:"required"`
+    Longitude float64 `json:"longitude" binding:"required"`
+}

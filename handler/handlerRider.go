@@ -326,3 +326,85 @@ func (h *AuthHandler) UpdateRiderLocation(c *gin.Context) {
 	// 5. ส่งสถานะสำเร็จกลับไป
 	c.JSON(http.StatusOK, gin.H{"message": "Location updated successfully"})
 }
+
+
+// +++ ฟังก์ชันใหม่: ยืนยันการรับสินค้า +++
+func (h *AuthHandler) ConfirmPickup(c *gin.Context) {
+    ctx := context.Background()
+
+    // 1. ดึง deliveryId จาก URL
+    deliveryId := c.Param("deliveryId")
+    if deliveryId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Delivery ID is required"})
+        return
+    }
+
+    // 2. ดึง riderUID จาก Token (เพื่อให้แน่ใจว่าคนที่กดเป็น Rider ที่รับงานจริงๆ)
+    uid, exists := c.Get("uid")
+    if !exists {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: UID not found"})
+        return
+    }
+    riderUID := uid.(string)
+
+
+    // 3. รับข้อมูล JSON payload ที่มี URL รูปภาพ
+    var payload struct {
+        PickupImageURL string `json:"pickupImageURL" binding:"required,url"`
+    }
+    if err := c.ShouldBindJSON(&payload); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+        return
+    }
+
+    // 4. อัปเดตข้อมูลใน Firestore
+    deliveryRef := h.FirestoreClient.Collection("deliveries").Doc(deliveryId)
+
+    // ใช้ Transaction เพื่อความปลอดภัยในการตรวจสอบข้อมูลก่อนอัปเดต
+    err := h.FirestoreClient.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+        doc, err := tx.Get(deliveryRef)
+        if err != nil {
+            return err
+        }
+
+        var delivery model.Delivery
+        if err := doc.DataTo(&delivery); err != nil {
+            return err
+        }
+
+        // ตรวจสอบเงื่อนไข:
+        // - สถานะต้องเป็น "accepted" เท่านั้น
+        // - RiderUID ที่อยู่ในเอกสารต้องตรงกับ Rider ที่ส่ง request มา
+        if delivery.Status != "accepted" {
+            return errors.New("delivery status is not 'accepted'")
+        }
+        if delivery.RiderUID == nil || *delivery.RiderUID != riderUID {
+            return errors.New("you are not the assigned rider for this delivery")
+        }
+
+        // 5. ถ้าเงื่อนไขถูกต้อง, ทำการอัปเดต
+        return tx.Update(deliveryRef, []firestore.Update{
+            {Path: "status", Value: "picked_up"}, // <-- เปลี่ยนสถานะเป็น "picked_up"
+            {Path: "pickupImage", Value: payload.PickupImageURL}, // <-- เพิ่ม field ใหม่สำหรับเก็บรูป
+        })
+    })
+
+
+    if err != nil {
+        log.Printf("Failed to confirm pickup for delivery %s by rider %s: %v", deliveryId, riderUID, err)
+        // ส่ง HTTP Status ที่เหมาะสมกลับไป
+        if strings.Contains(err.Error(), "not the assigned rider") || strings.Contains(err.Error(), "not 'accepted'"){
+             c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+        } else {
+             c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update delivery status"})
+        }
+        return
+    }
+
+
+    c.JSON(http.StatusOK, gin.H{
+        "message": "Pickup confirmed successfully",
+        "deliveryId": deliveryId,
+        "newStatus": "picked_up",
+    })
+}

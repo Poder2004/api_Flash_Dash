@@ -62,6 +62,12 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
 		// ++ เพิ่มเส้นทางใหม่สำหรับอัปเดตตำแหน่งของไรเดอร์ ++
         // Endpoint: POST /api/rider/location
         private.POST("/rider/location", authHandler.UpdateRiderLocation)
+
+
+		// +++ เส้นทางใหม่สำหรับยืนยันการรับสินค้า +++
+		// Endpoint: PUT /api/rider/deliveries/{deliveryId}/pickup
+		private.PUT("/rider/deliveries/:deliveryId/pickup", authHandler.ConfirmPickup)
+
 	}
 
 	return router

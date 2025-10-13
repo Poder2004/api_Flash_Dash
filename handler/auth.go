@@ -514,8 +514,11 @@ func (h *AuthHandler) FindUserByPhone(c *gin.Context) {
 
 	// 5. สร้างข้อมูลเพื่อส่งกลับ (ตอนนี้ชนิดข้อมูลถูกต้องแล้ว)
 	response := model.FindUserResponse{
-		Name:      userProfile.Name,
-		Addresses: addresses, // <-- ไม่มี Error แล้ว
+		Name:         userProfile.Name,
+		Phone:        userProfile.Phone,        // ++ เพิ่มเข้ามา
+		ImageProfile: userProfile.ImageProfile, // ++ เพิ่มเข้ามา
+		Role:         userProfile.Role,         // ++ เพิ่มเข้ามา
+		Addresses:    addresses,
 	}
 
 	c.JSON(http.StatusOK, response)

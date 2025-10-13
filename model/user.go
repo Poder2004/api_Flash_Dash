@@ -38,6 +38,9 @@ type UpdateProfilePayload struct {
 
 // FindUserResponse คือโครงสร้างข้อมูลที่จะส่งกลับไปเมื่อค้นหาผู้ใช้เจอ
 type FindUserResponse struct {
-	Name      string    `json:"name"`
-	Addresses []Address `json:"addresses"`
+    Name         string    `json:"name"`
+    Phone        string    `json:"phone"`         // ++ เพิ่มเข้ามา
+    ImageProfile string    `json:"image_profile"` // ++ เพิ่มเข้ามา
+    Role         string    `json:"role"`          // ++ เพิ่มเข้ามา
+    Addresses    []Address `json:"addresses"`
 }

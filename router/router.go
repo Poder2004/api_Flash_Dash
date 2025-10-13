@@ -53,6 +53,11 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
         // --- เพิ่มเส้นทางสำหรับ Rider ที่นี่ ---
         // Endpoint: GET /api/rider/deliveries/pending
         private.GET("/rider/deliveries/pending", authHandler.GetPendingDeliveries)
+		// +++ เส้นทางใหม่สำหรับ Rider รับงาน +++
+		// Endpoint: POST /api/rider/deliveries/{deliveryId}/accept
+		// เมื่อ Rider กดรับงาน, App จะยิงมาที่เส้นทางนี้
+		// โดย :deliveryId คือ ID ของงานที่ต้องการรับ
+		private.POST("/rider/deliveries/:deliveryId/accept", authHandler.AcceptDelivery)
 	}
 
 	return router

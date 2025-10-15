@@ -476,3 +476,79 @@ func (h *AuthHandler) ConfirmDelivery(c *gin.Context) {
 		"newStatus": "delivered",
 	})
 }
+
+
+
+// GetCurrentDelivery ตรวจสอบและดึงข้อมูลการจัดส่งที่ไรเดอร์กำลังทำอยู่
+func (h *AuthHandler) GetCurrentDelivery(c *gin.Context) {
+	ctx := context.Background()
+
+	// 1. ดึง riderUID จาก Token ที่ Middleware ส่งมาให้
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: UID not found"})
+		return
+	}
+	riderUID := uid.(string)
+
+	var activeDelivery model.Delivery
+
+	// 2. สร้าง Query เพื่อค้นหางานที่ Active อยู่
+	// เราจะค้นหางานที่ riderUID ตรงกัน และ status เป็น 'accepted' หรือ 'picked_up'
+	// ใช้ Limit(1) เพราะไรเดอร์ควรจะมีงานที่ทำค้างอยู่ได้แค่งานเดียว
+	query := h.FirestoreClient.Collection("deliveries").
+		Where("riderUID", "==", riderUID).
+		Where("status", "in", []string{"accepted", "picked_up"}).
+		Limit(1)
+
+	iter := query.Documents(ctx)
+	doc, err := iter.Next()
+
+	// 3. ตรวจสอบผลลัพธ์
+	if err == iterator.Done {
+		// iterator.Done หมายถึง วนลูปจนสุดแล้ว แต่ไม่เจอข้อมูลเลย
+		log.Printf("No active delivery found for rider %s", riderUID)
+		c.Status(http.StatusNoContent) // 204 No Content: สำเร็จแต่ไม่มีข้อมูลจะส่งกลับ
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to query for active delivery for rider %s: %v", riderUID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get active delivery"})
+		return
+	}
+
+	// 4. ถ้าเจอข้อมูล, แปลงข้อมูลและส่งกลับ
+	if err := doc.DataTo(&activeDelivery); err != nil {
+		log.Printf("Failed to convert active delivery data: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process delivery data"})
+		return
+	}
+	activeDelivery.ID = doc.Ref.ID
+
+	// 5. (Optional but Recommended) ดึงข้อมูลเพิ่มเติมเหมือนตอนดึง Pending
+	// เพื่อให้ข้อมูลที่ส่งกลับไปครบถ้วนสมบูรณ์
+	senderProfile, _ := h.FirestoreClient.Collection("users").Doc(activeDelivery.SenderUID).Get(ctx)
+	if senderProfile != nil {
+		senderData := senderProfile.Data()
+		if name, ok := senderData["name"].(string); ok {
+			activeDelivery.SenderName = name
+		}
+		if img, ok := senderData["image_profile"].(string); ok {
+			activeDelivery.SenderImageProfile = img
+		}
+	}
+
+	receiverProfile, _ := h.FirestoreClient.Collection("users").Doc(activeDelivery.ReceiverUID).Get(ctx)
+	if receiverProfile != nil {
+		receiverData := receiverProfile.Data()
+		if name, ok := receiverData["name"].(string); ok {
+			activeDelivery.ReceiverName = name
+		}
+		if img, ok := receiverData["image_profile"].(string); ok {
+			activeDelivery.ReceiverImageProfile = img
+		}
+	}
+
+	// 6. ส่งข้อมูลของงานที่ค้างอยู่กลับไป
+	c.JSON(http.StatusOK, activeDelivery)
+}

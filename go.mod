@@ -1,6 +1,6 @@
 module api-flash-dash
 
-go 1.25.1
+go 1.25.0
 
 require (
 	cel.dev/expr v0.23.1 // indirect

@@ -211,20 +211,17 @@ func (h *AuthHandler) GetPendingDeliveries(c *gin.Context) {
 }
 
 // +++ โค้ดใหม่: ฟังก์ชันสำหรับ Rider รับงาน +++
-
 // AcceptDelivery คือ Handler สำหรับให้ Rider กดรับงาน
 func (h *AuthHandler) AcceptDelivery(c *gin.Context) {
 	ctx := context.Background()
 
 	// 1. ดึงข้อมูลที่จำเป็นจาก Request
-	// deliveryId จะมาจาก URL path เช่น /deliveries/xyz/accept
 	deliveryId := c.Param("deliveryId")
 	if deliveryId == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Delivery ID is required"})
 		return
 	}
 
-	// riderUID จะมาจาก Middleware หลังจากยืนยันตัวตนแล้ว (สมมติว่าเก็บไว้ใน context ชื่อ "uid")
 	riderUID, exists := c.Get("uid")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Rider UID not found"})
@@ -242,7 +239,7 @@ func (h *AuthHandler) AcceptDelivery(c *gin.Context) {
 	err := h.FirestoreClient.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		doc, err := tx.Get(deliveryRef) // อ่านข้อมูลล่าสุดภายใน Transaction
 		if err != nil {
-			return err // คืนค่า error เพื่อให้ Transaction ล้มเหลว
+			return err
 		}
 
 		var delivery model.Delivery
@@ -252,24 +249,36 @@ func (h *AuthHandler) AcceptDelivery(c *gin.Context) {
 
 		// 3. **ตรวจสอบเงื่อนไขสำคัญ:** งานนี้ต้องมีสถานะเป็น "pending" เท่านั้น
 		if delivery.Status != "pending" {
-			// ถ้าสถานะไม่ใช่ "pending" แสดงว่ามีคนอื่นตัดหน้าไปแล้ว
-			// คืนค่า error เพื่อยกเลิก Transaction
 			return errors.New("delivery is not pending, it may have already been accepted")
 		}
 
-		// 4. ถ้าเงื่อนไขถูกต้อง, ทำการอัปเดตข้อมูล
+		// +++ 4. เพิ่มการตรวจสอบ RiderUID ต้องเป็น nil เท่านั้น +++
+		// เนื่องจาก model ของเรา RiderUID เป็น *string (pointer) มันจึงสามารถเป็น nil ได้
+		// ถ้า riderUID มีค่าอยู่แล้ว (แม้ status จะเป็น pending) แสดงว่ามีบางอย่างผิดปกติ
+		// หรือเป็นงานที่เคยมีคนรับไปแล้ว เราจะไม่อนุญาตให้รับงานนี้ซ้ำซ้อน
+		if delivery.RiderUID != nil {
+			return errors.New("delivery has already been assigned, cannot be accepted again")
+		}
+
+		// 5. ถ้าเงื่อนไขทั้งหมดถูกต้อง, ทำการอัปเดตข้อมูล
 		return tx.Update(deliveryRef, []firestore.Update{
-			{Path: "status", Value: "accepted"},    // เปลี่ยน status เป็น "accepted"
+			{Path: "status", Value: "accepted"},   // เปลี่ยน status เป็น "accepted"
 			{Path: "riderUID", Value: riderUIDStr}, // อัปเดต riderUID ของคนที่รับงาน
 		})
 	})
 
-	// 5. ตรวจสอบผลลัพธ์ของ Transaction
+	// 6. ตรวจสอบผลลัพธ์ของ Transaction
 	if err != nil {
 		// ตรวจสอบว่าเป็น error ที่เราสร้างขึ้นเองหรือไม่
 		if err.Error() == "delivery is not pending, it may have already been accepted" {
 			log.Printf("Rider %s failed to accept delivery %s: %v", riderUIDStr, deliveryId, err)
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()}) // 409 Conflict เหมาะสมกับสถานการณ์นี้
+		
+		// +++ 7. เพิ่มการจัดการสำหรับ Error ใหม่ที่เราสร้างขึ้น +++
+		} else if err.Error() == "delivery has already been assigned, cannot be accepted again" {
+			log.Printf("Rider %s failed to accept delivery %s: %v", riderUIDStr, deliveryId, err)
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()}) // 409 Conflict เช่นกัน
+
 		} else {
 			log.Printf("Transaction failed for accepting delivery %s: %v", deliveryId, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to accept delivery"})
@@ -277,7 +286,7 @@ func (h *AuthHandler) AcceptDelivery(c *gin.Context) {
 		return
 	}
 
-	// 6. หากสำเร็จ ส่งข้อความกลับไป
+	// 8. หากสำเร็จ ส่งข้อความกลับไป
 	log.Printf("Rider %s successfully accepted delivery %s", riderUIDStr, deliveryId)
 	c.JSON(http.StatusOK, gin.H{
 		"message":    "Delivery accepted successfully",
@@ -475,4 +484,80 @@ func (h *AuthHandler) ConfirmDelivery(c *gin.Context) {
 		"message":   "Delivery confirmed successfully",
 		"newStatus": "delivered",
 	})
+}
+
+
+
+// GetCurrentDelivery ตรวจสอบและดึงข้อมูลการจัดส่งที่ไรเดอร์กำลังทำอยู่
+func (h *AuthHandler) GetCurrentDelivery(c *gin.Context) {
+	ctx := context.Background()
+
+	// 1. ดึง riderUID จาก Token ที่ Middleware ส่งมาให้
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: UID not found"})
+		return
+	}
+	riderUID := uid.(string)
+
+	var activeDelivery model.Delivery
+
+	// 2. สร้าง Query เพื่อค้นหางานที่ Active อยู่
+	// เราจะค้นหางานที่ riderUID ตรงกัน และ status เป็น 'accepted' หรือ 'picked_up'
+	// ใช้ Limit(1) เพราะไรเดอร์ควรจะมีงานที่ทำค้างอยู่ได้แค่งานเดียว
+	query := h.FirestoreClient.Collection("deliveries").
+		Where("riderUID", "==", riderUID).
+		Where("status", "in", []string{"accepted", "picked_up"}).
+		Limit(1)
+
+	iter := query.Documents(ctx)
+	doc, err := iter.Next()
+
+	// 3. ตรวจสอบผลลัพธ์
+	if err == iterator.Done {
+		// iterator.Done หมายถึง วนลูปจนสุดแล้ว แต่ไม่เจอข้อมูลเลย
+		log.Printf("No active delivery found for rider %s", riderUID)
+		c.Status(http.StatusNoContent) // 204 No Content: สำเร็จแต่ไม่มีข้อมูลจะส่งกลับ
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to query for active delivery for rider %s: %v", riderUID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get active delivery"})
+		return
+	}
+
+	// 4. ถ้าเจอข้อมูล, แปลงข้อมูลและส่งกลับ
+	if err := doc.DataTo(&activeDelivery); err != nil {
+		log.Printf("Failed to convert active delivery data: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process delivery data"})
+		return
+	}
+	activeDelivery.ID = doc.Ref.ID
+
+	// 5. (Optional but Recommended) ดึงข้อมูลเพิ่มเติมเหมือนตอนดึง Pending
+	// เพื่อให้ข้อมูลที่ส่งกลับไปครบถ้วนสมบูรณ์
+	senderProfile, _ := h.FirestoreClient.Collection("users").Doc(activeDelivery.SenderUID).Get(ctx)
+	if senderProfile != nil {
+		senderData := senderProfile.Data()
+		if name, ok := senderData["name"].(string); ok {
+			activeDelivery.SenderName = name
+		}
+		if img, ok := senderData["image_profile"].(string); ok {
+			activeDelivery.SenderImageProfile = img
+		}
+	}
+
+	receiverProfile, _ := h.FirestoreClient.Collection("users").Doc(activeDelivery.ReceiverUID).Get(ctx)
+	if receiverProfile != nil {
+		receiverData := receiverProfile.Data()
+		if name, ok := receiverData["name"].(string); ok {
+			activeDelivery.ReceiverName = name
+		}
+		if img, ok := receiverData["image_profile"].(string); ok {
+			activeDelivery.ReceiverImageProfile = img
+		}
+	}
+
+	// 6. ส่งข้อมูลของงานที่ค้างอยู่กลับไป
+	c.JSON(http.StatusOK, activeDelivery)
 }

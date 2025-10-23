@@ -660,4 +660,84 @@ func (h *AuthHandler) queryDeliveries(field, uid string) ([]model.Delivery, erro
 	return deliveries, nil
 }
 
+// GetAllCustomersHandler ดึงข้อมูลลูกค้าทั้งหมด (ที่ไม่ใช่ rider และไม่ใช่ตัวเอง)
+func (h *AuthHandler) GetAllCustomersHandler(c *gin.Context) {
+	ctx := context.Background()
+	var customers []model.FindUserResponse
+
+	// --- 1. จุดแก้ไข: ดึง UID ของ "ตัวเอง" (คนที่ยิง API) มาจาก context ---
+	uid, exists := c.Get("uid")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User UID not found in context"})
+		return
+	}
+	senderUID := uid.(string)
+	// --- จบส่วนแก้ไข ---
+
+	// 2. Query ผู้ใช้ทั้งหมดที่เป็น "customer"
+	iter := h.FirestoreClient.Collection("users").Where("role", "==", "customer").Documents(ctx)
+	
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			log.Printf("Failed to iterate customers: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve customers"})
+			return
+		}
+
+		// --- 3. จุดแก้ไข: ตรวจสอบว่า User ที่วนลูปเจอ คือ "ตัวเอง" หรือไม่ ---
+		customerUID := doc.Ref.ID
+		if customerUID == senderUID {
+			continue // ถ้าใช่ ให้ข้ามไปคนถัดไป
+		}
+		// --- จบส่วนแก้ไข ---
+
+		var userProfile model.UserProfile
+		if err := doc.DataTo(&userProfile); err != nil {
+			log.Printf("Failed to parse user profile: %v", err)
+			continue // ข้าม user ที่มีปัญหา
+		}
+
+		// 4. สำหรับลูกค้าแต่ละคน, ดึงที่อยู่ (addresses) ทั้งหมดของเขา
+		var addresses []model.Address
+		addrIter := h.FirestoreClient.Collection("users").Doc(customerUID).Collection("addresses").Documents(ctx) // ใช้ customerUID
+		for {
+			addrDoc, err := addrIter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				log.Printf("Failed to get address for user %s: %v", customerUID, err)
+				break 
+			}
+
+			var address model.Address
+			if err := addrDoc.DataTo(&address); err != nil {
+				log.Printf("Could not convert address data: %v", err)
+				continue
+			}
+			address.ID = addrDoc.Ref.ID
+			addresses = append(addresses, address)
+		}
+
+		// 5. สร้าง object response สำหรับลูกค้ารายนี้
+		customerData := model.FindUserResponse{
+			Name: userProfile.Name,
+			Phone: userProfile.Phone,
+			ImageProfile: userProfile.ImageProfile,
+			Role: userProfile.Role,
+			Addresses: addresses,
+		}
+		customers = append(customers, customerData)
+	}
+
+	// 6. ส่งลิสต์ลูกค้าทั้งหมดกลับไป
+	c.JSON(http.StatusOK, gin.H{
+		"customers": customers,
+	})
+}
+
 // -----------------------------------------------------------------------------------------------------------------------------------------//

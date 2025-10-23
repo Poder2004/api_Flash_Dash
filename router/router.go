@@ -45,6 +45,10 @@ func SetupRouter(authHandler *handler.AuthHandler) *gin.Engine {
 		// Endpoint: GET /api/user/deliveries
 		private.GET("/user/deliveries", authHandler.GetUserDeliveries)
 
+		// +++ เส้นทางใหม่สำหรับดึงลูกค้ทั้งหมด +++
+        // Endpoint: GET /api/users/customers
+        private.GET("/users/customers", authHandler.GetAllCustomersHandler)
+
 		// --- เส้นทางสำหรับ Rider ---
 		// Endpoint: PUT /api/rider/profile
 		// เราจะเรียกใช้ฟังก์ชัน UpdateRiderProfile ที่อยู่ใน AuthHandler
